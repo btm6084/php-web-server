@@ -79,25 +79,48 @@ if (!$socket) {
         }
 
         unset($conn);
-        unset($request);
 
         // Listen for a connection.
         while($conn = stream_socket_accept($socket, 2)) {
+            unset($request);
+            unset($inbound);
+            unset($postInfo);
+
             $matches = array();
             $date = date("D, d M Y H:i:s");
-            $request = stream_socket_recvfrom($conn, 1024);
 
-            //echo "$request \r\n";
+            // Read the header.
+            $end = 0;
+            do {
+                $inbound = stream_socket_recvfrom($conn, 1);
+                $request .= $inbound;
 
-            /**
-             * Check to see if we are recieving a file from SWFUpload. If not, process as normal.
-             */
+                // End of header pattern is 13 10 13 10.
+                if(ord($inbound) == 13 && ($end == 0 || $end == 2)) {
+                    $end++;
+                } else if(ord($inbound) == 10 && ($end == 1 || $end == 3)) {
+                    $end++;
+                } else {
+                    $end = 0;
+                }
+            } while($end != 4);
+
+
+            // Check to see if we are recieving a file from SWFUpload. If not, process as normal.
             $pattern = "/User-Agent: Shockwave Flash/";
             if(preg_match($pattern, $request)) {
-                do {
-                    $inbound = stream_socket_recvfrom($conn, 25);
-                    $request .= $inbound;
-                } while(strlen($inbound) == 25);
+                $head = explode(PHP_EOL, $request);
+                $temp = $head[count($head)-5];
+
+                $pattern = "/Content-Length: ([0-9]*)/";
+                if(preg_match($pattern, $temp, $matches)) {
+                    $postInfo = "";
+                    do {
+                        $inbound = stream_socket_recvfrom($conn, 1);
+                        $postInfo .= $inbound;
+                        $request .= $inbound;
+                    } while(strlen($postInfo) < $matches[1]);
+                }
 
                 // Process from SWFUpload
                 processUpload($request, $webroot);
@@ -107,7 +130,25 @@ if (!$socket) {
                 $headers[] = "HTTP/1.1 200 OK";
                 stream_socket_sendto($conn, implode("\r\n", $headers) . "\r\n\r\n");
                 fclose($conn);
+
+            // Else, it's just a normal HTTP request. Serve it up.
             } else {
+                // Find out if we have to parse POST info.
+                $head = explode(PHP_EOL, $request);
+                $temp = $head[count($head)-3];
+
+                $pattern = "/Content-Length: ([0-9]*)/";
+                if(preg_match($pattern, $temp, $matches)) {
+                    $postInfo = "";
+                    do {
+                        $inbound = stream_socket_recvfrom($conn, 1);
+                        $postInfo .= $inbound;
+                    } while(strlen($postInfo) < $matches[1]);
+
+                    var_dump($postInfo);
+                }
+                $request .= $postInfo;
+
                 // Split the request string into an array by line to make it easier to parse.
                 $request = explode(PHP_EOL, $request);
 
@@ -209,7 +250,11 @@ function getContent($fileName) {
 
     return $content;
 }
-
+/**
+  * Parses the content of the SWFUPload request and saves the file attached.
+  * Directory structure used is webroot/uploads/procedureID
+  *
+  */
 function processUpload($request, $webroot) {
 
     $matches = array();
