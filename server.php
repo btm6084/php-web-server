@@ -44,6 +44,7 @@ $mimeType = array(
     'jpg'   => 'image/jpg',
     'png'   => 'image/png',
     'gif'   => 'image/gif',
+    'ico'   => 'image/icon',
     ''      => 'text/html'
 );
 
@@ -59,7 +60,7 @@ if (!$socket) {
   echo "$errstr ($errno)<br />" . PHP_EOL;
 } else {
     // Start the browser, point it to the landing page.
-    //shell_exec("start http://localhost/patient.php");
+    shell_exec("start http://localhost:81/patient.php");
 
     while (true) {
         // Check to see if the browser is still running. If not, shut down.
@@ -85,6 +86,7 @@ if (!$socket) {
             unset($request);
             unset($inbound);
             unset($postInfo);
+            $request = "";
 
             $matches = array();
             $date = date("D, d M Y H:i:s");
@@ -105,7 +107,6 @@ if (!$socket) {
                 }
             } while($end != 4);
 
-
             // Check to see if we are recieving a file from SWFUpload. If not, process as normal.
             $pattern = "/User-Agent: Shockwave Flash/";
             if(preg_match($pattern, $request)) {
@@ -121,6 +122,8 @@ if (!$socket) {
                         $request .= $inbound;
                     } while(strlen($postInfo) < $matches[1]);
                 }
+
+                echo "$request \r\n";
 
                 // Process from SWFUpload
                 processUpload($request, $webroot);
@@ -138,14 +141,12 @@ if (!$socket) {
                 $temp = $head[count($head)-3];
 
                 $pattern = "/Content-Length: ([0-9]*)/";
+                $postInfo = "";
                 if(preg_match($pattern, $temp, $matches)) {
-                    $postInfo = "";
                     do {
                         $inbound = stream_socket_recvfrom($conn, 1);
                         $postInfo .= $inbound;
                     } while(strlen($postInfo) < $matches[1]);
-
-                    var_dump($postInfo);
                 }
                 $request .= $postInfo;
 
@@ -153,6 +154,8 @@ if (!$socket) {
                 $request = explode(PHP_EOL, $request);
 
                 // Certain lines are well known. File is first, accept is 3rd, POST is last.
+                $postString = "";
+                $getString = "";
                 $fileString = $request[0];
                 $acceptString = $request[3];
                 $postString = array_pop($request);
@@ -185,31 +188,13 @@ if (!$socket) {
                 // Get the query string.
                 $pattern = '/[?]([^\s]*)/';
                 if(preg_match($pattern, $fileString, $matches)) {
-                    $queryString = $matches[1];
-
+                    $getString = $matches[1];
                     // Set the query string.
-                    $_SERVER['QUERY_STRING'] = $queryString;
-
-                    // Store the $_GET variables from the query string.
-                    $queries = array();
-                    parse_str($queryString, $queries);
-                    foreach($queries as $var => $val) {
-                        $_GET[$var] = $val;
-                    }
+                    $_SERVER['QUERY_STRING'] = $getString;
                 }
 
-                // Process POST data:
-                $pattern = '/([^\s]*[=][^\s&]*)*/';
-                if(preg_match($pattern, $postString, $matches)) {
-                    $post = array();
-                    if(isset($matches[1])) {
-                        parse_str($matches[1], $post);
-                        foreach($post as $var => $val) {
-                            $_POST[$var] = $val;
-                        }
-                    }
-                }
             }
+
 
             // Return a 404 if the file was not found.
             if(!file_exists($fullFileName)) {
@@ -221,7 +206,7 @@ if (!$socket) {
                 $content = "ERROR 404: File $fullFileName Not Found.";
             } else {
                 if($extension == 'php') {
-                    $content = getContent($fullFileName);
+                    $content = getContent($fullFileName, urldecode($getString), urldecode($postInfo));
                 } else {
                     $content = file_get_contents($fullFileName);
                 }
@@ -243,12 +228,14 @@ if (!$socket) {
   fclose($log);
 }
 
-function getContent($fileName) {
-    ob_start();
-        require($fileName);
-    $content = ob_get_clean();
+function getContent($fileName, $getString, $postString) {
+    $get  = escapeshellarg('get=1&'  . $getString);
+    $post = escapeshellarg('post=1&' . $postString);
+
+    $content = shell_exec("php scripts/loader.php $fileName $get $post");
 
     return $content;
+
 }
 /**
   * Parses the content of the SWFUPload request and saves the file attached.
