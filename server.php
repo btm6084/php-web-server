@@ -12,9 +12,7 @@ set_time_limit(0);
 date_default_timezone_set('America/Chicago');
 
 // Setup the log file.
-$log = fopen("log.txt", "w");
 $date = date("D, d M Y H:i:s");
-//fwrite($log, "[$date] Starting Web Server" . PHP_EOL);
 
 // Record errors from PHP
 function errorLog($errno, $errstr, $errfile, $errline)
@@ -55,12 +53,12 @@ $index = "index";
 // And its extension
 $indexExtension = "php";
 
-$socket = stream_socket_server("tcp://127.0.0.1:80", $errno, $errstr);
+$socket = stream_socket_server("tcp://127.0.0.1:81", $errno, $errstr);
 if (!$socket) {
   echo "$errstr ($errno)<br />" . PHP_EOL;
 } else {
     // Start the browser, point it to the landing page.
-    shell_exec("start http://localhost:81/patient.php");
+    //shell_exec("start http://localhost:81/patient.php");
 
     while (true) {
         // Check to see if the browser is still running. If not, shut down.
@@ -71,13 +69,8 @@ if (!$socket) {
             break;
         }
 
-        foreach($_POST as $key => $val) {
-            unset($_POST[$key]);
-        }
-
-        foreach($_GET as $key => $val) {
-            unset($_GET[$key]);
-        }
+        $_POST = array();
+        $_GET = array();
 
         unset($conn);
 
@@ -122,8 +115,6 @@ if (!$socket) {
                         $request .= $inbound;
                     } while(strlen($postInfo) < $matches[1]);
                 }
-
-                echo "$request \r\n";
 
                 // Process from SWFUpload
                 processUpload($request, $webroot);
@@ -195,7 +186,6 @@ if (!$socket) {
 
             }
 
-
             // Return a 404 if the file was not found.
             if(!file_exists($fullFileName)) {
                 $headers = array();
@@ -204,6 +194,17 @@ if (!$socket) {
                 $headers[] = "Content-Type: " . $mimeType[$extension];
 
                 $content = "ERROR 404: File $fullFileName Not Found.";
+            } else if($fullFileName == 'scripts/download.php') {
+                $content = getContent($fullFileName, urldecode($getString), urldecode($postInfo));
+
+                parse_str($getString, $get);
+
+                $headers = array();
+                $headers[] = "HTTP/1.1 200 OK";
+                $headers[] = "Date: $date";
+                $headers[] = "Content-Length: " . (strlen($content));
+                $headers[] = "Content-Type: " . $mimeType[$get['type']];
+
             } else {
                 if($extension == 'php') {
                     $content = getContent($fullFileName, urldecode($getString), urldecode($postInfo));
@@ -225,17 +226,35 @@ if (!$socket) {
     }
 
   fclose($socket);
-  fclose($log);
 }
 
 function getContent($fileName, $getString, $postString) {
+
     $get  = escapeshellarg('get=1&'  . $getString);
     $post = escapeshellarg('post=1&' . $postString);
 
-    $content = shell_exec("php scripts/loader.php $fileName $get $post");
+    //$content = shell_exec("php scripts/loader.php $fileName $get $post");
+
+    //return $content;
+
+    $descriptorspec = array(
+       0 => array("pipe", "r"),  // stdin is a pipe that the child will read from
+       1 => array("pipe", "w"),  // stdout is a pipe that the child will write to
+    );
+
+    $process = proc_open("php scripts/loader.php $fileName $get $post", $descriptorspec, $pipes);
+
+    if (is_resource($process)) {
+
+        $content = stream_get_contents($pipes[1]);
+        fclose($pipes[1]);
+
+        // It is important that you close any pipes before calling
+        // proc_close in order to avoid a deadlock
+        $return_value = proc_close($process);
+    }
 
     return $content;
-
 }
 /**
   * Parses the content of the SWFUPload request and saves the file attached.
@@ -274,8 +293,13 @@ function processUpload($request, $webroot) {
         $vars[$var] = $val;
     }
 
-    // Save the file somewhere ...
-    $path = $webroot.'uploads/' . $vars['id'] . '/';
+
+    // If you want the server to treat downloads in the same manner PHP does,
+    // use this code to store a temporary file. Then, fill out the $_FILES
+    // array properly. As for cleaning up your temp file, best place would
+    // probably be after the require for the uploadhandler.
+    /*
+    $path = $webroot.'uploads/';
 
     if(file_exists($path)) {
         $file = fopen($path.$vars['Filename'], 'w');
@@ -285,6 +309,30 @@ function processUpload($request, $webroot) {
     }
     fwrite($file, $vars['Filedata']);
     fclose($file);
+    */
 
+    // Certain lines are well known. File is first, accept is 3rd, POST is last.
+    $fileString = $request[0];
+
+    // The entire file name being requested:
+    $pattern = '/[\/]([^\s?]*)/';
+    if(preg_match($pattern, $fileString, $matches)) {
+        // If we don't find a file match, use the index defined at the top of the file.
+        $file = $matches[1];
+        // Break it down into file . extension
+        $pattern = '/^([^\s]*)[.]([^\s?]*?)$/';
+        preg_match($pattern, $file, $matches);
+        $fileName = $matches[1];
+        $extension = $matches[2];
+    }
+
+    $fileName = urldecode($fileName);
+    $uploadHandler = $webroot . $fileName . "." . $extension;
+
+    $_FILES['name'] = $vars['Filename'];
+    $_FILES['content'] = $vars['Filedata'];
+    $_FILES['procedure_id'] = $vars['id'];
+
+    require($uploadHandler);
 }
 ?>
