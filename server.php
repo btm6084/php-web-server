@@ -91,7 +91,6 @@ if (!$socket) {
                     $end = 0;
                 }
                 $count++;
-                //echo "Count: $count End: $end $inbound       ";
             } while($end != 4 && $count < 50000);
 
             if($count == 50000) {
@@ -129,41 +128,48 @@ if (!$socket) {
 
             // Else, it's just a normal HTTP request. Serve it up.
             } else {
-            	/**
-            	 * I've decided I don't like most of what I did in this else clause.
-            	 * @todo: Properly parse the header in a way that doesn't make assumptions about
-            	 * 	      where the header contents exist.
-            	 *
-            	 */
+                // Parse the headers segment into individual headers
+				preg_match_all(
+					"/(?P<name>[^:]+): (?P<value>[^\r]+)(?:$|\r\n[^ \t]*)/U",
+					$request,
+					$parsed,
+					PREG_SET_ORDER
+				);
+
+				$fileString = '';
+				$contentLength = 0;
+				$post = false;
+				$postString = "";
+                $getString = "";
+
+                // Extract the parsed fields into something usable.
+				foreach($parsed as $field) {
+					if(strpos($field['name'], 'GET') !== FALSE)
+					{
+						$fileString = $field['name'];
+					}
+					if(strpos($field['name'], 'POST') !== FALSE)
+					{
+						$fileString = $field['name'];
+						$post = true;
+					}
+					if(strpos($field['name'], 'Content-Length') !== FALSE)
+					{
+						$contentLength = $field['value'];
+					}
+				}
+
                 // Find out if we have to parse POST info.
-                $pattern = "/Content-Length: ([0-9]*)/";
-                $postInfo = "";
-                if(preg_match($pattern, $request, $matches)) {
+                if($contentLength > 0) {
                     do {
                         $inbound = stream_socket_recvfrom($conn, 1);
-                        $postInfo .= $inbound;
-                    } while(strlen($postInfo) < $matches[1]);
-                }
-                $request .= $postInfo;
-
-                if($postInfo) {
-                	echo PHP_EOL ."Post Info:" . PHP_EOL;
-                	echo $postInfo . PHP_EOL . PHP_EOL;
+                        $postString .= $inbound;
+                    } while(strlen($postString) < $contentLength);
                 }
 
-                // Split the request string into an array by line to make it easier to parse.
-                $rqAsArr = explode(PHP_EOL, $request);
-
-                // Certain lines are well known. File is first, accept is 3rd, POST is last.
-                $postString = "";
-                $getString = "";
-                $fileString = $rqAsArr[0];
-                $postString = array_pop($rqAsArr);
-
-                $matches = array();
-                $pattern = "/Accept: ([^\n]*)/";
-                if(preg_match($pattern, $request, $matches)) {
-                	$acceptString = trim($matches[0]);
+                if($postString) {
+                	echo PHP_EOL ."Post Info($contentLength):" . PHP_EOL;
+                	echo $postString . PHP_EOL . PHP_EOL;
                 }
 
                 // The entire file name being requested:
@@ -221,7 +227,7 @@ if (!$socket) {
 
             } else {
                 if($extension == 'php') {
-                    $content = getContent($fullFileName, urldecode($getString), urldecode($postInfo));
+                    $content = getContent($fullFileName, urldecode($getString), urldecode($postString));
                 } else {
                     $content = file_get_contents($fullFileName);
                 }
@@ -255,19 +261,15 @@ function getContent($fileName, $getString, $postString) {
     $get  = escapeshellarg('get=1&'  . $getString);
     $post = escapeshellarg('post=1&' . $postString);
 
-    //$content = shell_exec("php scripts/loader.php $fileName $get $post");
-
-    //return $content;
-
     $descriptorspec = array(
        0 => array("pipe", "r"),  // stdin is a pipe that the child will read from
        1 => array("pipe", "w"),  // stdout is a pipe that the child will write to
     );
 
+    // We load php-cgi because we want our output interpreted for a browser.
     $process = proc_open("php-cgi loader.php $fileName $get $post", $descriptorspec, $pipes);
 
     if (is_resource($process)) {
-
         $content = stream_get_contents($pipes[1]);
         fclose($pipes[1]);
 
@@ -363,3 +365,4 @@ function processUpload($request, $webroot) {
     require($uploadHandler);
 }
 ?>
+
