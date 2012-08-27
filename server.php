@@ -57,18 +57,9 @@ $socket = stream_socket_server("tcp://127.0.0.1:81", $errno, $errstr);
 if (!$socket) {
   echo "$errstr ($errno)<br />" . PHP_EOL;
 } else {
-    // Start the browser, point it to the landing page.
-    //shell_exec("start http://localhost:81/patient.php");
+    echo "Listening...\n";
 
     while (true) {
-        // Check to see if the browser is still running. If not, shut down.
-        // Windows only.
-        $processes = shell_exec("wmic process");
-        $pattern = '/(iexplore[.]exe)|(firefox[.]exe)/';
-        if(!preg_match($pattern, $processes, $matches)) {
-            break;
-        }
-
         $_POST = array();
         $_GET = array();
 
@@ -86,6 +77,7 @@ if (!$socket) {
 
             // Read the header.
             $end = 0;
+            $count = 0;
             do {
                 $inbound = stream_socket_recvfrom($conn, 1);
                 $request .= $inbound;
@@ -98,7 +90,17 @@ if (!$socket) {
                 } else {
                     $end = 0;
                 }
-            } while($end != 4);
+                $count++;
+                //echo "Count: $count End: $end $inbound       ";
+            } while($end != 4 && $count < 50000);
+
+            if($count == 50000) {
+            	continue;
+            }
+
+            echo "Requested:\n\n";
+            print_r($request);
+            echo "\n\n";
 
             // Check to see if we are recieving a file from SWFUpload. If not, process as normal.
             $pattern = "/User-Agent: Shockwave Flash/";
@@ -127,13 +129,16 @@ if (!$socket) {
 
             // Else, it's just a normal HTTP request. Serve it up.
             } else {
+            	/**
+            	 * I've decided I don't like most of what I did in this else clause.
+            	 * @todo: Properly parse the header in a way that doesn't make assumptions about
+            	 * 	      where the header contents exist.
+            	 *
+            	 */
                 // Find out if we have to parse POST info.
-                $head = explode(PHP_EOL, $request);
-                $temp = $head[count($head)-3];
-
                 $pattern = "/Content-Length: ([0-9]*)/";
                 $postInfo = "";
-                if(preg_match($pattern, $temp, $matches)) {
+                if(preg_match($pattern, $request, $matches)) {
                     do {
                         $inbound = stream_socket_recvfrom($conn, 1);
                         $postInfo .= $inbound;
@@ -141,15 +146,25 @@ if (!$socket) {
                 }
                 $request .= $postInfo;
 
+                if($postInfo) {
+                	echo PHP_EOL ."Post Info:" . PHP_EOL;
+                	echo $postInfo . PHP_EOL . PHP_EOL;
+                }
+
                 // Split the request string into an array by line to make it easier to parse.
-                $request = explode(PHP_EOL, $request);
+                $rqAsArr = explode(PHP_EOL, $request);
 
                 // Certain lines are well known. File is first, accept is 3rd, POST is last.
                 $postString = "";
                 $getString = "";
-                $fileString = $request[0];
-                $acceptString = $request[3];
-                $postString = array_pop($request);
+                $fileString = $rqAsArr[0];
+                $postString = array_pop($rqAsArr);
+
+                $matches = array();
+                $pattern = "/Accept: ([^\n]*)/";
+                if(preg_match($pattern, $request, $matches)) {
+                	$acceptString = trim($matches[0]);
+                }
 
                 // The entire file name being requested:
                 $pattern = '/[\/]([^\s?]*)/';
@@ -183,7 +198,6 @@ if (!$socket) {
                     // Set the query string.
                     $_SERVER['QUERY_STRING'] = $getString;
                 }
-
             }
 
             // Return a 404 if the file was not found.
@@ -219,6 +233,10 @@ if (!$socket) {
                 $headers[] = "Content-Type: " . $mimeType[$extension];
             }
 
+            echo "Response:\n";
+            print_r($headers);
+            echo "\n\n";
+
             stream_socket_sendto($conn, implode("\r\n", $headers) . "\r\n\r\n");
             stream_socket_sendto($conn, $content);
             fclose($conn);
@@ -228,6 +246,10 @@ if (!$socket) {
   fclose($socket);
 }
 
+
+/**
+ * Get Content is what you would want to change to change the backing language. Right now, it executes PHP.
+ */
 function getContent($fileName, $getString, $postString) {
 
     $get  = escapeshellarg('get=1&'  . $getString);
@@ -242,7 +264,7 @@ function getContent($fileName, $getString, $postString) {
        1 => array("pipe", "w"),  // stdout is a pipe that the child will write to
     );
 
-    $process = proc_open("php scripts/loader.php $fileName $get $post", $descriptorspec, $pipes);
+    $process = proc_open("php-cgi loader.php $fileName $get $post", $descriptorspec, $pipes);
 
     if (is_resource($process)) {
 
@@ -253,6 +275,11 @@ function getContent($fileName, $getString, $postString) {
         // proc_close in order to avoid a deadlock
         $return_value = proc_close($process);
     }
+
+    // We want to strip out the pgp-cgi string (ie. X-Powered-By: PHP/5.4.4 Content-type: text/html);
+    $pattern = "/X[-]Powered[-]By[:][^\n]*[\n][^\n]*[\n]/";
+    $matches = array();
+    $content = preg_replace($pattern, "", $content);
 
     return $content;
 }
