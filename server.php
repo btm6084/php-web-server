@@ -91,9 +91,9 @@ if (!$socket) {
                     $end = 0;
                 }
                 $count++;
-            } while($end != 4 && $count < 50000);
+            } while($end != 4 && $count < 25000);
 
-            if($count == 50000) {
+            if($count == 25000) {
             	continue;
             }
 
@@ -243,7 +243,7 @@ if (!$socket) {
             print_r($headers);
             echo "\n\n";
 
-            stream_socket_sendto($conn, implode("\r\n", $headers) . "\r\n\r\n");
+            stream_socket_sendto($conn, implode(PHP_EOL, $headers) . PHP_EOL . PHP_EOL);
             stream_socket_sendto($conn, $content);
             fclose($conn);
         }
